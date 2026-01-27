@@ -1,0 +1,307 @@
+dotnet add package Ocelot
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+
+
+
+
+var builder = WebApplication.CreateBuilder(args);
+
+
+// Add Ocelot configuration file
+builder.Configuration.AddJsonFile("ocelot.json", optional: false, reloadOnChange: true);
+
+// Configure JWT Authentication
+const string AuthenticationProviderKey = "Bearer";
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(AuthenticationProviderKey, options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
+        };
+    });
+
+// Add Ocelot services
+builder.Services.AddOcelot(builder.Configuration);
+
+var app = builder.Build();
+
+// Use Authentication and Authorization middleware
+app.UseAuthentication();
+app.UseAuthorization();
+
+// Use Ocelot middleware
+await app.UseOcelot();
+
+app.Run();
+
+
+
+
+https://code-maze.com/dotnetcore-secure-microservices-jwt-ocelot/
+
+
+
+=========================================================================================================================
+
+const string MyAuthenticationKey = "MyKey"; // This is the value you use
+services.AddAuthentication()
+    .AddJwtBearer(MyAuthenticationKey, options => {
+        // ... options initialization
+    })
+    .AddCookie("Cookies", options => {
+        // ... options initialization
+    });
+
+
+
+"Routes": [
+  {
+    // ...
+    "AuthenticationOptions": {
+      "AuthenticationProviderKeys": "MyKey", // Must match the key in code
+      "AllowedScopes": []
+    }
+  }
+]
+
+=========================================================================================================================
+
+Implementing JWT authentication with Ocelot API Gateway involves configuring Ocelot to validate tokens using standard ASP.NET Core JWT bearer middleware and defining which routes require authentication. 
+Step-by-Step Example
+The following example assumes you have an Ocelot API Gateway project and an existing Identity/Authentication service that issues JWT tokens. 
+
+1. Add Required NuGet Packages 
+In your Ocelot API Gateway project, install Ocelot and the ASP.NET Core JWT authentication package: 
+
+bash
+dotnet add package Ocelot
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+
+2. Configure Authentication Services in Program.cs 
+In your Program.cs file (or Startup.cs for older project templates), configure the JWT bearer authentication service. This setup is standard ASP.NET Core configuration, not Ocelot specific, but is necessary for Ocelot to use it: 
+
+csharp
+using Ocelot.DependencyInjection;
+using Ocelot.Middleware;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Configure JWT Authentication
+var issuer = builder.Configuration["Jwt:Issuer"];
+var audience = builder.Configuration["Jwt:Audience"];
+var key = builder.Configuration["Jwt:Key"];
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+}).AddJwtBearer("Bearer", options => // Use "Bearer" as the scheme name
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = issuer,
+        ValidAudience = audience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key))
+    };
+});
+
+builder.Services.AddOcelot(builder.Configuration);
+
+var app = builder.Build();
+
+// Enable authentication and then Ocelot
+app.UseAuthentication();
+app.UseAuthorization(); // If you use claims-based authorization
+await app.UseOcelot();
+
+app.Run();
+
+Note: The string key, issuer, and audience values should be securely stored in your application settings (e.g., appsettings.json or environment variables). 
+
+
+3. Configure ocelot.json Routes
+In your ocelot.json configuration file, specify which routes require the JWT authentication scheme you defined ("Bearer" in this example). 
+json
+{
+  "Routes": [
+    // --- Protected Route Example ---
+    {
+      "DownstreamPathTemplate": "/api/products/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "UpstreamPathTemplate": "/gateway/products/{everything}",
+      "UpstreamHttpMethod": [ "GET", "POST", "PUT", "DELETE" ],
+      "AuthenticationOptions": {
+        "AuthenticationProviderKeys": [ "Bearer" ],
+        "AllowedScopes": [] // Add specific scopes if needed
+      }
+    },
+    // --- Public Route (Login/Auth Service) Example ---
+    {
+      "DownstreamPathTemplate": "/api/auth/login",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002 // Assumes an auth service runs on port 5002
+        }
+      ],
+      "UpstreamPathTemplate": "/gateway/auth/login",
+      "UpstreamHttpMethod": [ "POST" ]
+      // No AuthenticationOptions means this route is public
+    }
+  ],
+  "GlobalConfiguration": {
+    "BaseUrl": "http://localhost:5000" // Your API Gateway URL
+  }
+}
+
+4. Load Ocelot Configuration
+Ensure your ocelot.json file is loaded by the configuration builder in Program.cs: 
+
+csharp
+builder.Configuration.AddJsonFile("ocelot.json", optional: false, reloadOnChange: true);
+
+Also, ensure the file is set to "Copy if newer" in its properties in Visual Studio to ensure it's in the output directory.
+Flow of Authentication
+A client first makes a request to the public gateway/auth/login route to get a JWT token from your authentication service.
+For subsequent requests to protected routes (like gateway/products), the client includes the JWT in the Authorization header as Bearer <token>.
+The Ocelot API Gateway intercepts the request, validates the token using the configured ASP.NET Core JWT middleware, and forwards the request to the downstream service only if the token is valid.
+If the token is invalid or missing for a protected route, Ocelot will return an HTTP 401 Unauthorized error before the request even reaches the downstream service. 
+
+
+=========================================================================================================================
+
+
+In Ocelot, AuthenticationProviderKey is not a fixed enum with predefined values.
+It’s simply a string key that must match the name of an authentication scheme you register in ASP.NET Core.
+
+So the “possible values” are:
+👉 whatever scheme names you configure (e.g. "Bearer", "JwtBearer", "Google", "ApiKeyScheme", etc.)
+
+Below are the most common and practical examples 👇
+
+1️⃣ JWT Bearer Authentication (most common)
+Program.cs / Startup.cs
+builder.Services
+    .AddAuthentication()
+    .AddJwtBearer("Bearer", options =>
+    {
+        options.Authority = "https://localhost:5001";
+        options.Audience = "api";
+    });
+ocelot.json
+{
+  "Routes": [
+    {
+      "DownstreamPathTemplate": "/api/products",
+      "DownstreamScheme": "https",
+      "DownstreamHostAndPorts": [
+        { "Host": "localhost", "Port": 7001 }
+      ],
+      "UpstreamPathTemplate": "/products",
+      "UpstreamHttpMethod": [ "GET" ],
+      "AuthenticationOptions": {
+        "AuthenticationProviderKey": "Bearer",
+        "AllowedScopes": []
+      }
+    }
+  ]
+}
+
+✅ "Bearer" must exactly match the name in AddJwtBearer("Bearer", ...)
+
+2️⃣ JWT with a Custom Scheme Name
+Program.cs
+builder.Services
+    .AddAuthentication()
+    .AddJwtBearer("JwtAuth", options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true
+        };
+    });
+ocelot.json
+"AuthenticationOptions": {
+  "AuthenticationProviderKey": "JwtAuth"
+}
+3️⃣ Multiple Authentication Providers
+
+You can have multiple values across different routes.
+
+Program.cs
+builder.Services.AddAuthentication()
+    .AddJwtBearer("UserJwt", options => { })
+    .AddJwtBearer("AdminJwt", options => { });
+ocelot.json
+{
+  "Routes": [
+    {
+      "UpstreamPathTemplate": "/user",
+      "AuthenticationOptions": {
+        "AuthenticationProviderKey": "UserJwt"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/admin",
+      "AuthenticationOptions": {
+        "AuthenticationProviderKey": "AdminJwt"
+      }
+    }
+  ]
+}
+4️⃣ API Key Authentication (Custom)
+Program.cs
+builder.Services
+    .AddAuthentication()
+    .AddScheme<ApiKeyAuthOptions, ApiKeyAuthHandler>(
+        "ApiKeyScheme", options => { });
+ocelot.json
+"AuthenticationOptions": {
+  "AuthenticationProviderKey": "ApiKeyScheme"
+}
+5️⃣ No Authentication (Public Route)
+
+Simply omit AuthenticationOptions:
+
+{
+  "UpstreamPathTemplate": "/public",
+  "DownstreamPathTemplate": "/api/public"
+}
+🔑 Summary Table
+AuthenticationProviderKey	When to use
+"Bearer"	Default JWT bearer
+"JwtBearer"	Alternative JWT name
+"JwtAuth"	Custom JWT scheme
+"UserJwt"	Role-based routes
+"AdminJwt"	Admin-only routes
+"ApiKeyScheme"	API key auth
+(omit)	Public endpoint
+⚠️ Common Mistake
+
+If you see:
+
+No authenticationScheme was specified
+
+👉 Your AuthenticationProviderKey does not match any registered scheme.
