@@ -1,0 +1,661 @@
+In today’s API-driven world, security is paramount. JSON Web Tokens (JWT) have become the de facto standard for stateless authentication in web APIs. However, to build truly secure and user-friendly systems, you must also implement refresh tokens to maintain sessions without compromising security.
+
+Become a member
+This article covers everything you need to build a secure API using ASP.NET Core, JWT access tokens, and refresh tokens — with practical code examples and security best practices.
+
+🤔 Why JWT + Refresh Tokens?
+JWTs are compact, URL-safe tokens that carry user claims. They are self-contained and allow stateless authentication.
+JWTs typically have short expiration times (e.g., 15 minutes) to limit damage if stolen.
+Refresh tokens are long-lived, securely stored tokens that clients use to request new JWTs without forcing users to log in again.
+Together, they balance security and usability.
+
+Step 1: Setting Up JWT Authentication in ASP.NET Core
+Install the necessary NuGet package:
+
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+Configure JWT authentication in Program.cs:
+
+services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = Configuration["Jwt:Issuer"],
+        ValidAudience = Configuration["Jwt:Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Configuration["Jwt:Key"]))
+    };
+});
+Add middleware
+
+app.UseAuthentication();
+app.UseAuthorization();
+Step 2: Creating the Token Service
+A reusable service to generate JWTs and refresh tokens:
+
+public class TokenService
+{
+    private readonly IConfiguration _config;
+
+    public TokenService(IConfiguration config)
+    {
+        _config = config;
+    }
+
+    public string GenerateAccessToken(IEnumerable<Claim> claims)
+    {
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"]));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        var expires = DateTime.UtcNow.AddMinutes(15);
+
+        var token = new JwtSecurityToken(
+            issuer: _config["Jwt:Issuer"],
+            audience: _config["Jwt:Audience"],
+            claims: claims,
+            expires: expires,
+            signingCredentials: creds);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public string GenerateRefreshToken()
+    {
+        var randomNumber = new byte[32];
+        using var rng = RandomNumberGenerator.Create();
+        rng.GetBytes(randomNumber);
+        return Convert.ToBase64String(randomNumber);
+    }
+}
+Step 3: Implementing Refresh Tokens
+Storing Refresh Tokens
+Store refresh tokens securely in your database, linked to the user. Include fields such as token string, expiry, creation date, and revocation status.
+
+Refresh Token Endpoint Example
+[HttpPost("refresh")]
+public async Task<IActionResult> Refresh([FromBody] TokenRequest request)
+{
+    var principal = GetPrincipalFromExpiredToken(request.AccessToken);
+    var username = principal.Identity.Name;
+
+    var savedRefreshToken = await _tokenRepository.GetRefreshToken(username, request.RefreshToken);
+
+    if (savedRefreshToken == null || savedRefreshToken.IsRevoked || savedRefreshToken.ExpiryDate <= DateTime.UtcNow)
+    {
+        return Unauthorized("Invalid refresh token");
+    }
+
+    var newAccessToken = _tokenService.GenerateAccessToken(principal.Claims);
+    var newRefreshToken = _tokenService.GenerateRefreshToken();    
+
+    await _tokenRepository.RevokeRefreshToken(savedRefreshToken);
+    await _tokenRepository.SaveRefreshToken(username, newRefreshToken);
+
+    return Ok(new
+    {
+        AccessToken = newAccessToken,
+        RefreshToken = newRefreshToken
+    });
+}
+
+private ClaimsPrincipal GetPrincipalFromExpiredToken(string token)
+{
+    var tokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateAudience = true,
+        ValidateIssuer = true,
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"])),
+        ValidateLifetime = false // We want to get claims from expired token
+    };
+
+    var tokenHandler = new JwtSecurityTokenHandler();
+    var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out var securityToken);
+
+    if (!(securityToken is JwtSecurityToken jwtSecurityToken) ||
+        !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
+        throw new SecurityTokenException("Invalid token");
+
+    return principal;
+}
+Step 4: Securing Your API
+Use the [Authorize] attribute on controllers or actions.
+Always validate tokens on every request.
+Protect sensitive endpoints with roles or policies.
+Example:
+
+[Authorize(Roles = "Admin")]
+[HttpGet("admin")]
+public IActionResult GetAdminData()
+{
+    return Ok("This is secured admin data.");
+}
+🔐 Security Best Practices
+HTTPS only: Never transmit tokens over unencrypted channels.
+Store refresh tokens securely: Prefer HttpOnly, Secure cookies or encrypted storage on clients.
+Invalidate refresh tokens on logout or suspicious activity.
+Implement token rotation to reduce replay attacks.
+Monitor and log authentication events for suspicious behavior.
+📝 Wrapping Up
+By combining JWT and refresh tokens, you create a secure, scalable, and user-friendly authentication system for your ASP.NET Core APIs. This approach supports stateless APIs, reduces risks from token theft, and improves user experience with seamless token renewal.
+
+❗Final Notes for Production-Grade Security
+Before you ship your authentication system to production, keep these critical security best practices in mind:
+
+🔐 Always validate JWT claims against your database, especially for roles, permissions, and user status. A token is just a snapshot — never trust it blindly.
+🧬 Keep your JWT signing secret out of version control. Use tools like Azure Key Vault, AWS Secrets Manager, or environment variables for secure storage.
+🔄 Force token expiration on role or permission changes. If a user’s access level changes, existing tokens should no longer be valid. You can track token versions or use a token revocation strategy via the DB.
+These little things make a huge difference between a secure system and a vulnerable one.
+
+👏 Found this article useful?
+Give it a clap (or three or maybe more!) and follow for more .NET Core deep dives on security, API design, and production-ready patterns.
+
+Have you implemented secure token handling differently? I’d love to hear your approach — drop a comment and let’s trade notes.
+
+========================================================================================================================================
+========================================================================================================================================
+========================================================================================================================================
+
+
+As a full-stack .NET developer, securing your APIs is a critical task. Utilizing JWT (JSON Web Tokens) for authentication and authorization is a common and effective strategy. This article will guide you through implementing JWT access tokens and refresh tokens in an ASP.NET Core Web API.
+
+Why Use JWT?
+JWT tokens are compact, URL-safe tokens that are easy to transfer between parties. They are self-contained, meaning they carry information within themselves, reducing the need for server-side session storage.
+
+Press enter or click to view image in full size
+
+Setting Up the Project
+First, create a new ASP.NET Core Web API project:
+
+dotnet new webapi -n JwtAuthDemo
+cd JwtAuthDemo
+Add the necessary NuGet packages:
+
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+dotnet add package Microsoft.IdentityModel.Tokens
+dotnet add package System.IdentityModel.Tokens.Jwt
+Configuring JWT Authentication
+In your appsettings.json, add your JWT settings:
+
+{
+  "JwtSettings": {
+    "SecretKey": "your_secret_key",
+    "Issuer": "your_issuer",
+    "Audience": "your_audience",
+    "AccessTokenExpirationMinutes": 30,
+    "RefreshTokenExpirationDays": 7
+  }
+}
+Update Program.cs to configure JWT authentication:
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Load JWT settings
+var jwtSettings = builder.Configuration.GetSection("JwtSettings").Get<JwtSettings>();
+var secretKey = Encoding.UTF8.GetBytes(jwtSettings.SecretKey);
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateIssuerSigningKey = true,
+        ValidateLifetime = true,
+        ValidIssuer = jwtSettings.Issuer,
+        ValidAudience = jwtSettings.Audience,
+        IssuerSigningKey = new SymmetricSecurityKey(secretKey)
+    };
+});
+
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
+Creating JWT Token Services
+Create a new class JwtTokenService to handle token creation and validation:
+
+public class JwtTokenService
+{
+    private readonly JwtSettings _jwtSettings;
+
+    public JwtTokenService(IOptions<JwtSettings> jwtSettings)
+    {
+        _jwtSettings = jwtSettings.Value;
+    }
+
+    public string GenerateAccessToken(IEnumerable<Claim> claims)
+    {
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.SecretKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: _jwtSettings.Issuer,
+            audience: _jwtSettings.Audience,
+            claims: claims,
+            expires: DateTime.Now.AddMinutes(_jwtSettings.AccessTokenExpirationMinutes),
+            signingCredentials: creds);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public string GenerateRefreshToken()
+    {
+        var randomNumber = new byte[32];
+        using (var rng = RandomNumberGenerator.Create())
+        {
+            rng.GetBytes(randomNumber);
+            return Convert.ToBase64String(randomNumber);
+        }
+    }
+}
+Implementing Authentication Endpoints
+Create a new controller AuthController to handle login and token refresh:
+
+[ApiController]
+[Route("api/[controller]")]
+public class AuthController : ControllerBase
+{
+    private readonly JwtTokenService _jwtTokenService;
+
+    public AuthController(JwtTokenService jwtTokenService)
+    {
+        _jwtTokenService = jwtTokenService;
+    }
+
+    [HttpPost("login")]
+    public IActionResult Login([FromBody] LoginRequest request)
+    {
+        // Assuming the user is authenticated successfully
+        var claims = new[]
+        {
+            new Claim(ClaimTypes.Name, request.Username),
+            // Add other claims as needed
+        };
+
+        var accessToken = _jwtTokenService.GenerateAccessToken(claims);
+        var refreshToken = _jwtTokenService.GenerateRefreshToken();
+
+        // Save or update the refresh token in the database
+
+        return Ok(new { AccessToken = accessToken, RefreshToken = refreshToken });
+    }
+
+    [HttpPost("refresh")]
+    public IActionResult Refresh([FromBody] TokenRequest request)
+    {
+        // Validate the refresh token and generate a new access token
+        // This should include checking the refresh token against the stored value in the database
+
+        var claims = new[]
+        {
+            new Claim(ClaimTypes.Name, "username") // Replace with actual username from the refresh token
+        };
+
+        var newAccessToken = _jwtTokenService.GenerateAccessToken(claims);
+Refresh Token Endpoint
+In the AuthController, we need to implement the refresh token logic. This typically involves validating the refresh token, ensuring it's not expired, and then generating a new access token. Here's how you can do it:
+
+[HttpPost("refresh")]
+public IActionResult Refresh([FromBody] TokenRequest request)
+{
+    // Validate the refresh token (retrieve the stored refresh token from the database)
+    var storedRefreshToken = GetStoredRefreshToken(request.RefreshToken);
+
+    if (storedRefreshToken == null || storedRefreshToken.ExpirationDate < DateTime.UtcNow)
+    {
+        return Unauthorized("Invalid or expired refresh token.");
+    }
+
+    // Assuming you have the username or user ID stored with the refresh token
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.Name, storedRefreshToken.Username)
+        // Add other claims as needed
+    };
+
+    var newAccessToken = _jwtTokenService.GenerateAccessToken(claims);
+    var newRefreshToken = _jwtTokenService.GenerateRefreshToken();
+
+    // Update the stored refresh token
+    storedRefreshToken.Token = newRefreshToken;
+    storedRefreshToken.ExpirationDate = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays);
+    SaveRefreshToken(storedRefreshToken);
+
+    return Ok(new { AccessToken = newAccessToken, RefreshToken = newRefreshToken });
+}
+Models
+Create the necessary models for your requests and settings. For example, LoginRequest, TokenRequest, and JwtSettings:
+
+public class LoginRequest
+{
+    public string Username { get; set; }
+    public string Password { get; set; }
+}
+
+public class TokenRequest
+{
+    public string AccessToken { get; set; }
+    public string RefreshToken { get; set; }
+}
+
+public class JwtSettings
+{
+    public string SecretKey { get; set; }
+    public string Issuer { get; set; }
+    public string Audience { get; set; }
+    public int AccessTokenExpirationMinutes { get; set; }
+    public int RefreshTokenExpirationDays { get; set; }
+}
+Storing and Validating Refresh Tokens
+For simplicity, let’s assume you have a method to store and retrieve refresh tokens from a database. Here’s a basic example using a hypothetical data access layer:
+
+public class RefreshToken
+{
+    public string Token { get; set; }
+    public string Username { get; set; }
+    public DateTime ExpirationDate { get; set; }
+}
+
+public RefreshToken GetStoredRefreshToken(string refreshToken)
+{
+    // Implement your logic to retrieve the refresh token from the database
+    // For example, using Entity Framework Core:
+    // return _context.RefreshTokens.SingleOrDefault(rt => rt.Token == refreshToken);
+    return null;
+}
+
+public void SaveRefreshToken(RefreshToken refreshToken)
+{
+    // Implement your logic to save the refresh token to the database
+    // For example, using Entity Framework Core:
+    // _context.RefreshTokens.Update(refreshToken);
+    // _context.SaveChanges();
+}
+Summary
+With these components in place, you have a robust setup for JWT-based authentication in your ASP.NET Core Web API. Here’s a quick overview of what we’ve covered:
+
+Project Setup: Created a new ASP.NET Core Web API project and added necessary NuGet packages.
+JWT Configuration: Configured JWT settings in appsettings.json and Program.cs.
+Token Service: Implemented JwtTokenService to generate and validate tokens.
+Authentication Endpoints: Created AuthController with login and token refresh endpoints.
+Models and Storage: Defined models for requests and implemented methods to store and retrieve refresh tokens.
+By following these steps, you ensure that your API is secure and that users can maintain their sessions without constantly re-authenticating, thanks to the refresh token mechanism. This setup not only enhances security but also improves user experience by providing seamless access to protected resources.
+
+Securing Your Endpoints
+After configuring JWT authentication, you need to protect your API endpoints to ensure only authenticated users can access them. You can use the [Authorize] attribute to secure your controllers or specific actions.
+
+Become a member
+For example, to secure the entire WeatherForecastController:
+
+[Authorize]
+[ApiController]
+[Route("[controller]")]
+public class WeatherForecastController : ControllerBase
+{
+    // Your actions here
+}
+Or to secure a specific action:
+
+[ApiController]
+[Route("[controller]")]
+public class WeatherForecastController : ControllerBase
+{
+    [HttpGet]
+    [Authorize]
+    public IEnumerable<WeatherForecast> Get()
+    {
+        // Your action logic here
+    }
+}
+Handling Token Expiration
+JWTs have an expiration time, and once expired, the client needs to use the refresh token to obtain a new access token. Handling token expiration properly is crucial for maintaining security and user experience.
+
+Here’s an example of how you might handle token expiration on the client side (e.g., using JavaScript/TypeScript in a frontend application):
+
+async function fetchWithAuth(url, options = {}) {
+    let response = await fetch(url, options);
+
+    if (response.status === 401) {
+        // Token might be expired, try to refresh it
+        const refreshResponse = await fetch('/api/auth/refresh', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                accessToken: localStorage.getItem('accessToken'),
+                refreshToken: localStorage.getItem('refreshToken')
+            })
+        });
+
+        if (refreshResponse.ok) {
+            const { accessToken, refreshToken } = await refreshResponse.json();
+            localStorage.setItem('accessToken', accessToken);
+            localStorage.setItem('refreshToken', refreshToken);
+
+            // Retry the original request
+            options.headers = {
+                ...options.headers,
+                'Authorization': `Bearer ${accessToken}`
+            };
+            response = await fetch(url, options);
+        }
+    }
+
+    return response;
+}
+Best Practices for Managing Refresh Tokens
+Store Refresh Tokens Securely: Refresh tokens are sensitive and should be stored securely. Preferably, use HTTP-only cookies to store refresh tokens as they are less prone to XSS attacks.
+Rotate Refresh Tokens: Each time a refresh token is used, generate a new pair of access and refresh tokens. This limits the lifespan of a stolen refresh token.
+Blacklist Used Tokens: Keep a list of invalidated tokens to prevent reuse. This can be implemented using a database or in-memory store.
+Limit Refresh Attempts: Implement a mechanism to limit the number of times a refresh token can be used to prevent abuse.
+Example of Using HTTP-Only Cookies
+Here’s an example of how you might issue and handle refresh tokens using HTTP-only cookies in your AuthController:
+
+[HttpPost("login")]
+public IActionResult Login([FromBody] LoginRequest request)
+{
+    // Assuming the user is authenticated successfully
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.Name, request.Username),
+        // Add other claims as needed
+    };
+
+    var accessToken = _jwtTokenService.GenerateAccessToken(claims);
+    var refreshToken = _jwtTokenService.GenerateRefreshToken();
+
+    // Save or update the refresh token in the database
+    SaveRefreshToken(new RefreshToken
+    {
+        Token = refreshToken,
+        Username = request.Username,
+        ExpirationDate = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays)
+    });
+
+    // Set the refresh token as an HTTP-only cookie
+    Response.Cookies.Append("refreshToken", refreshToken, new CookieOptions
+    {
+        HttpOnly = true,
+        Secure = true, // Set to true in production
+        Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays)
+    });
+
+    return Ok(new { AccessToken = accessToken });
+}
+
+[HttpPost("refresh")]
+public IActionResult Refresh()
+{
+    var refreshToken = Request.Cookies["refreshToken"];
+    if (string.IsNullOrEmpty(refreshToken))
+    {
+        return Unauthorized("Refresh token is missing.");
+    }
+
+    var storedRefreshToken = GetStoredRefreshToken(refreshToken);
+    if (storedRefreshToken == null || storedRefreshToken.ExpirationDate < DateTime.UtcNow)
+    {
+        return Unauthorized("Invalid or expired refresh token.");
+    }
+
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.Name, storedRefreshToken.Username)
+    };
+
+    var newAccessToken = _jwtTokenService.GenerateAccessToken(claims);
+    var newRefreshToken = _jwtTokenService.GenerateRefreshToken
+Rotating Refresh Tokens
+As mentioned, rotating refresh tokens on each use is a good practice. This means every time a refresh token is used to obtain a new access token, a new refresh token should also be generated and sent to the client. This limits the potential damage if a refresh token is compromised.
+
+Update your refresh token endpoint in the AuthController to handle token rotation:
+
+[HttpPost("refresh")]
+public IActionResult Refresh()
+{
+    var oldRefreshToken = Request.Cookies["refreshToken"];
+    if (string.IsNullOrEmpty(oldRefreshToken))
+    {
+        return Unauthorized("Refresh token is missing.");
+    }
+
+    var storedRefreshToken = GetStoredRefreshToken(oldRefreshToken);
+    if (storedRefreshToken == null || storedRefreshToken.ExpirationDate < DateTime.UtcNow)
+    {
+        return Unauthorized("Invalid or expired refresh token.");
+    }
+
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.Name, storedRefreshToken.Username)
+    };
+
+    var newAccessToken = _jwtTokenService.GenerateAccessToken(claims);
+    var newRefreshToken = _jwtTokenService.GenerateRefreshToken();
+
+    // Update the stored refresh token
+    storedRefreshToken.Token = newRefreshToken;
+    storedRefreshToken.ExpirationDate = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays);
+    SaveRefreshToken(storedRefreshToken);
+
+    // Set the new refresh token as an HTTP-only cookie
+    Response.Cookies.Append("refreshToken", newRefreshToken, new CookieOptions
+    {
+        HttpOnly = true,
+        Secure = true, // Set to true in production
+        Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays)
+    });
+
+    return Ok(new { AccessToken = newAccessToken });
+}
+Handling User Logouts
+When a user logs out, you should invalidate their refresh token to prevent it from being used to generate new access tokens. You can achieve this by removing the refresh token from the database and clearing the HTTP-only cookie.
+
+Add a logout endpoint to your AuthController:
+
+[HttpPost("logout")]
+public IActionResult Logout()
+{
+    var refreshToken = Request.Cookies["refreshToken"];
+    if (!string.IsNullOrEmpty(refreshToken))
+    {
+        // Remove the refresh token from the database
+        RemoveRefreshToken(refreshToken);
+
+        // Clear the HTTP-only cookie
+        Response.Cookies.Delete("refreshToken");
+    }
+
+    return NoContent();
+}
+Improving Security
+Here are some additional security considerations to keep in mind:
+
+Use HTTPS: Always use HTTPS to encrypt the data transmitted between the client and server, including tokens. This prevents man-in-the-middle attacks.
+Short-lived Access Tokens: Keep access tokens short-lived (e.g., 15–30 minutes). This limits the time window an attacker has if they manage to steal an access token.
+Revoke Tokens on Password Change: If a user changes their password or performs a sensitive action, revoke all refresh tokens associated with the user to prevent unauthorized access.
+Rate Limiting: Implement rate limiting on authentication endpoints to prevent brute-force attacks.
+Example: Entity Framework Core Integration
+For a real-world application, you would typically use a database to store refresh tokens. Here’s an example of how you might integrate Entity Framework Core to manage refresh tokens:
+
+Define the RefreshToken Entity:
+public class RefreshToken
+{
+    public int Id { get; set; }
+    public string Token { get; set; }
+    public string Username { get; set; }
+    public DateTime ExpirationDate { get; set; }
+}
+2. Add the DbSet to Your DbContext:
+
+public class ApplicationDbContext : DbContext
+{
+    public DbSet<RefreshToken> RefreshTokens { get; set; }
+
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+        : base(options)
+    {
+    }
+}
+3. Implement Methods to Manage Refresh Tokens:
+
+public class RefreshTokenService
+{
+    private readonly ApplicationDbContext _context;
+
+    public RefreshTokenService(ApplicationDbContext context)
+    {
+        _context = context;
+    }
+
+    public void SaveRefreshToken(RefreshToken refreshToken)
+    {
+        _context.RefreshTokens.Update(refreshToken);
+        _context.SaveChanges();
+    }
+
+    public RefreshToken GetStoredRefreshToken(string token)
+    {
+        return _context.RefreshTokens.SingleOrDefault(rt => rt.Token == token);
+    }
+
+    public void RemoveRefreshToken(string token)
+    {
+        var refreshToken = GetStoredRefreshToken(token);
+        if (refreshToken != null)
+        {
+            _context.RefreshTokens.Remove(refreshToken
+
+
+Follow me on LinkedIn, Github and Twitter for more insights on fullstack development and performance optimization.
+
+
+=====================================================================================================================
+=====================================================================================================================
+=====================================================================================================================
+=====================================================================================================================
+
+https://www.linkedin.com/pulse/jwt-authentication-refresh-tokens-net-core-web-api-mohd-saeed-ujnvc/
+https://www.c-sharpcorner.com/article/implementing-jwt-refresh-tokens-in-net-8-0/
+
+
+
